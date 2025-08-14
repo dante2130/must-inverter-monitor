@@ -3,9 +3,11 @@ import time
 import requests
 import os
 import logging
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 from logging.handlers import RotatingFileHandler
+from paho.mqtt import client as mqtt_client
 
 load_dotenv()
 
@@ -28,10 +30,13 @@ SERBAUD = int(os.getenv("SERBAUD"))
 
 INTERVAL = int(os.getenv("INTERVAL"))
 
-INFLUX_HOST = os.getenv("INFLUX_HOST")
-INFLUX_ORGID = os.getenv("INFLUX_ORGID")
-INFLUX_BUCKET = os.getenv("INFLUX_BUCKET")
-INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
+MQTT_BROKER = os.getenv("MQTT_BROKER")
+MQTT_PORT = int(os.getenv("MQTT_PORT"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC")
+MQTT_DEVICE_NAME = os.getenv("MQTT_DEVICE_NAME")
+MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID")
+
+MAX_RETRIES = int(os.getenv("MAX_RETRIES"))
 
 # Registers to retrieve data for
 register_map = {
@@ -224,20 +229,100 @@ register_map = {
 
 }
 
-
+properties = {
+    'workState': {'name': 'Work state', 'format': '', 'icon': 'solar-power'},
+    'batteryVoltage': {'name': 'Battery voltage', 'format': 'V'},
+    'inverterVoltage': {'name': 'Inverter voltage', 'format': 'V'},
+    'gridVoltage': {'name': 'Grid voltage', 'format': 'V'},
+    'busVoltage': {'name': 'BUS voltage', 'format': 'V'},
+    'controlCurrent': {'name': 'Control current', 'format': 'A'},
+    'inverterCurrent': {'name': 'Inverter current', 'format': 'A'},
+    'gridCurrent': {'name': 'Grid current', 'format': 'A'},
+    'loadCurrent': {'name': 'Load current', 'format': 'A'},
+    'inverterPower': {'name': 'Inverter power(P)', 'format': 'W'},
+    'gridPower': {'name': 'Grid power(P)', 'format': 'W'},
+    'loadPower': {'name': 'Load power(P)', 'format': 'W'},
+    'loadPercent': {'name': 'Load percent', 'format': '%'},
+    'inverterComplexPower': {'name': 'Inverter complex power(S)', 'format': 'VA'},
+    'gridComplexPower': {'name': 'Grid complex power(S)', 'format': 'VA'},
+    'loadComplexPower': {'name': 'Load complex power(S)', 'format': 'VA'},
+    'inverterReactivePower': {'name': 'Inverter reactive power(Q)', 'format': ''},
+    'gridReactivePower': {'name': 'Grid reactive power(Q)', 'format': ''},
+    'loadReactivePower': {'name': 'Load reactive power(Q)', 'format': ''},
+    'inverterFrequency': {'name': 'Inverter frequency', 'format': 'Hz'},
+    'gridFrequency': {'name': 'Grid frequency', 'format': 'Hz'},
+    'acRadiatorTemperature': {'name': 'AC radiator temperature', 'format': '°C'},
+    'transformerTemperature': {'name': 'Transformer temperature', 'format': '°C'},
+    'dcRadiatorTemperature': {'name': 'DC radiator temperature', 'format': '°C'},
+    'InverterRelayState': {'name': 'InverterRelayState', 'format': ''},
+    'GridRelayState': {'name': 'GridRelayState', 'format': ''},
+    'LoadRelayState': {'name': 'LoadRelayState', 'format': ''},
+    'N_LineRelayState': {'name': 'N_LineRelayState', 'format': ''},
+    'DCRelayState': {'name': 'DCRelayState', 'format': ''},
+    'EarthRelayState': {'name': 'EarthRelayState', 'format': ''},
+    'AccumulatedChargerPowerM': {'name': 'AccumulatedChargerPowerM', 'format': 'Wh'},
+    'AccumulatedChargerPower': {'name': 'AccumulatedChargerPower', 'format': 'kWh'},
+    'AccumulatedDischargerPowerM': {'name': 'AccumulatedDischargerPowerM', 'format': 'Wh'},
+    'AccumulatedDischargerPower': {'name': 'AccumulatedDischargerPower', 'format': 'kWh'},
+    'AccumulatedBuyPowerM': {'name': 'AccumulatedBuyPowerM', 'format': 'Wh'},
+    'AccumulatedBuyPower': {'name': 'AccumulatedBuyPower', 'format': 'kWh'},
+    'AccumulatedSellPowerM': {'name': 'AccumulatedSellPowerM', 'format': 'Wh'},
+    'AccumulatedSellPower': {'name': 'AccumulatedSellPower', 'format': 'kWh'},
+    'AccumulatedLoadPowerM': {'name': 'AccumulatedLoadPowerM', 'format': 'Wh'},
+    'AccumulatedLoadPower': {'name': 'AccumulatedLoadPower', 'format': 'kWh'},
+    'AccumulatedSelfUsePowerM': {'name': 'AccumulatedSelfUsePowerM', 'format': 'Wh'},
+    'AccumulatedSelfUsePower': {'name': 'AccumulatedSelfUsePower', 'format': 'kWh'},
+    'AccumulatedPvSellPowerM': {'name': 'AccumulatedPvSellPowerM', 'format': 'Wh'},
+    'AccumulatedPvSellPower': {'name': 'AccumulatedPvSellPower', 'format': 'kWh'},
+    'AccumulatedGridChargerPowerM': {'name': 'AccumulatedGridChargerPowerM', 'format': 'Wh'},
+    'AccumulatedGridChargerPower': {'name': 'AccumulatedGridChargerPower', 'format': 'kWh'},
+    'batteryPower': {'name': 'Battery power', 'format': 'W'},
+    'batteryCurrent': {'name': 'Battery current', 'format': 'A'},
+    'PvVoltage': {'name': 'Pv. Voltage', 'format': 'V'},
+    'chBatteryVoltage': {'name': 'Ch. Battery Voltage', 'format': 'V'},
+    'chChargerCurrent': {'name': 'Ch. Charger Current', 'format': 'A'},
+    'ChargerPower': {'name': 'Ch. Charger Power', 'format': 'W'},
+    'RadiatorTemperature': {'name': 'Ch. Radiator Temperature', 'format': '°C'},
+    'ExternalTemperature': {'name': 'Ch. External Temperature', 'format': '°C'},
+    'BattVolGrade': {'name': 'BattVolGrade', 'format': 'V'},
+    'RatedCurrent': {'name': 'Rated Current', 'format': 'A'},
+    'AccumulatedPowerM': {'name': 'Accumulated PowerM', 'format': 'Wh'},
+    'AccumulatedPower': {'name': 'Accumulated Power', 'format': 'kWh'},
+    'AccumulatedTimeDay': {'name': 'Accumulated Time day', 'format': 'd'},
+    'BMS_Battery_Voltage': {'name': 'BMS Battery Voltage', 'format': 'V'},
+    'BMS_Battery_Current': {'name': 'BMS Battery Current', 'format': 'A'},
+    'BMS_Battery_Temperature': {'name': 'BMS Battery Temperature', 'format': '°C'},
+    'BMS_Battery_SOC': {'name': 'BMS Battery SOC', 'format': '%'},
+    'BMS_Battery_SOH': {'name': 'BMS Battery SOH', 'format': '%'},
+    'EnergyUseMode': {'name': 'Energy use mode', 'format': ''},
+    'Grid_protect_standard': {'name': 'Grid protect standard', 'format': ''},
+    'SolarUseAim': {'name': 'SolarUse Aim', 'format': ''},
+    'ChargerWorkstate': {'name': 'Charger Workstate', 'format': ''},
+    'MpptState': {'name': 'Mppt State', 'format': ''},
+    'ChargingState': {'name': 'Charging State', 'format': ''}
+}
 
 def read_register_values(i, startreg, count):
     stats_line = ""
-
     register_id = startreg
-    results = i.read_registers(startreg, count)
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            results = i.read_registers(startreg, count)
+            break
+        except minimalmodbus.InvalidResponseError:
+            logging.info(f"Ivalid response when retry attempt `{attempt}` of `{count}` bytes from `{startreg}`")
+            time.sleep(INTERVAL)
+        except minimalmodbus.NoResponseError:
+            logging.info(f"No response when read retry attempt `{attempt}` of `{count}` bytes from `{startreg}`")
+            time.sleep(INTERVAL)
     for r in results:
         if register_id in register_map:
             r_key = register_map[register_id][0]
             r_unit = register_map[register_id][2]
 
             if register_map[register_id][3] == "map":
-                r_value = '"' + register_map[register_id][4][r] + '"'
+                r_value = register_map[register_id][4][r]
             else:
                 r_value = str(round(r * r_unit, 2))
 
@@ -256,39 +341,108 @@ def read_register_values(i, startreg, count):
 
     return stats_line
 
+def connect_mqtt():
+    def on_connect(client, userdata, flags, rc):
+        if rc == 0:
+            logging.info("Connected to MQTT Broker!")
+        else:
+            logging.warning(f"Failed to connect, return code {rc}")
+
+    client = mqtt_client.Client(MQTT_CLIENT_ID)
+    client.on_connect = on_connect
+    client.connect(MQTT_BROKER, MQTT_PORT)
+    return client
+
+def publish(client, key, value):
+    topic = f"{MQTT_TOPIC}/sensor/{MQTT_DEVICE_NAME}_{key}"
+    result = client.publish(topic, value)
+    status = result[0]
+    if status == 0:
+        logging.info(f"Send `{value}` to topic `{topic}`")
+    else:
+        logging.warning(f"Failed to send message to topic `{topic}`")
 
 def send_data(stats):
-    url = "{}/api/v2/write?orgID={}&bucket={}".format(
-        INFLUX_HOST, INFLUX_ORGID, INFLUX_BUCKET
-    )
-    data = "inverter " + stats + " " + str(time.time_ns())
+    props = stats.split(",")
+    for propObj in props:
+      prop = propObj.split("=")
+      publish(client, prop[0], prop[1])
 
-    logging.info(data)
-    r = requests.post(
-        url,
-        data=data,
-        headers={
-            "content-type": "text/plain",
-            "Authorization": "Token " + INFLUX_TOKEN,
-        },
-    )
-    logging.info(f"{r.status_code} {r.text}")
+def register_inverter():
+    topic = f"{MQTT_TOPIC}/sensor/{MQTT_DEVICE_NAME}/config"
+    config = {
+        "name": MQTT_DEVICE_NAME,
+        "state_topic": f"{MQTT_TOPIC}/sensor/{MQTT_DEVICE_NAME}"
+    }
 
+    result = client.publish(topic, json.dumps(config, indent=4))
+    status = result[0]
+
+    if status == 0:
+        logging.info(f"Register inverter `{MQTT_DEVICE_NAME}`")
+    else:
+        logging.warning(f"Failed to register inverter `{MQTT_DEVICE_NAME}`")
+
+def register_topic(property_name):
+    topic_base = f"{MQTT_TOPIC}/sensor/{MQTT_DEVICE_NAME}_{property_name}"
+    topic = f"{topic_base}/config"
+    prop = properties[property_name]
+
+    try:
+        icon = prop['icon']
+    except KeyError:
+        icon = None
+
+    config = {
+        "object_id": f"{MQTT_DEVICE_NAME}_{property_name}",
+        "name": prop['name'],
+        "unit_of_measurement": prop['format'],
+        "state_topic": topic_base
+    }
+
+    if icon is not None:
+        config['icon'] = f"mdi:{icon}"
+
+    result = client.publish(topic, json.dumps(config, indent=4))
+    status = result[0]
+
+    if status == 0:
+        logging.info(f"Register topic `{topic_base}`")
+    else:
+        logging.warning(f"Failed to register topic `{topic_base}`")
+
+def register_topics():
+    for key, value in properties.items():
+        register_topic(key)
 
 infinite = True
+
+client = connect_mqtt()
+client.loop_start()
+
+register_inverter()
+time.sleep(INTERVAL)
+register_topics()
 
 while infinite:
     i = minimalmodbus.Instrument(SERPORT, 4)
     i.serial.timeout = SERTIMEOUT
     i.serial.baudrate = SERBAUD
-    stats_line_all = read_register_values(i, 15201, 19)
-    stats_line_all += "," + read_register_values(i, 25201, 80)
-    stats_line_all += "," + read_register_values(i, 20109, 19)
-    stats_line_all += "," + read_register_values(i, 109, 6)
-    send_data(stats_line_all)
 
+    stats = []
+
+    stats.append(read_register_values(i, 109, 6))
+    stats.append(read_register_values(i, 15201, 20))
+    stats.append(read_register_values(i, 20101, 114))
+    stats.append(read_register_values(i, 25201, 80))
+
+    send_data(",".join(stats))
 
     # infinite = False
 
     if infinite:
         time.sleep(INTERVAL)
+
+if not infinite:
+    client.loop_stop()
+    client.disconnect()
