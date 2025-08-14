@@ -1,4 +1,4 @@
-FROM arm64v8/python:latest
+FROM arm32v7/python:3.13.6
 
 WORKDIR /usr/src/app
 
