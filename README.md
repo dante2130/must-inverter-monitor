@@ -1,6 +1,6 @@
 # must-inverter-monitor
 
-Monitor a MUST inverter and send the stats to InfluxDB.
+Monitor a MUST inverter and send the stats to MQTT.
 
 Tested on a PV-1800.
 
@@ -9,7 +9,7 @@ Original code from [andremiller/must-inverter-python-monitor](https://github.com
 ## Requirements
 
 - Python
-- InfluxDB
+- MQTT
 
 ## Installation
 
