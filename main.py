@@ -415,14 +415,14 @@ def register_topics():
     for key, value in properties.items():
         register_topic(key)
 
+def register_inverter_mqtt_objects():
+    register_inverter()
+    register_topics()
+
 infinite = True
 
 client = connect_mqtt()
 client.loop_start()
-
-register_inverter()
-time.sleep(INTERVAL)
-register_topics()
 
 while infinite:
     i = minimalmodbus.Instrument(SERPORT, 4)
@@ -436,6 +436,7 @@ while infinite:
     stats.append(read_register_values(i, 20101, 114))
     stats.append(read_register_values(i, 25201, 80))
 
+    register_inverter_mqtt_objects()
     send_data(",".join(stats))
 
     # infinite = False
